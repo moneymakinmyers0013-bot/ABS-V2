@@ -1,0 +1,392 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TaskStatus {
+  DISCOVERED
+  QUALIFIED
+  QUOTED
+  AUTHORIZED
+  ACCEPTED
+  RUNNING
+  VALIDATING
+  DELIVERABLE_SUBMITTED
+  CUSTOMER_ACCEPTED
+  EARNED
+  FAILED
+  CLOSED
+}
+enum PayoutStatus {
+  AUTHORIZED
+  SUBMISSION_PENDING
+  PROVIDER_PENDING
+  UNKNOWN
+  PAID
+  PAYOUT_FAILED
+  RECONCILIATION_REQUIRED
+}
+enum PaymentDirection {
+  INBOUND
+  REFUND
+}
+enum PaymentStatus {
+  CREATED
+  CAPTURED_VERIFIED
+  FAILED
+  REFUND_PENDING
+  REFUNDED
+}
+enum LedgerAccount {
+  PROVIDER_CASH
+  CUSTOMER_PREPAID
+  REVENUE
+  PAYOUT_RESERVED
+  OWNER_DISTRIBUTION
+}
+enum ReservationStatus {
+  HELD
+  RELEASED
+  SETTLED
+}
+enum ExecutionStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  RETRYABLE_FAILED
+  TERMINAL_FAILED
+}
+enum EarningStatus {
+  PENDING
+  EARNED
+  REVERSED
+}
+
+model Owner {
+  id String @id @default(uuid())
+  email String @unique
+  createdAt DateTime @default(now())
+  destinations Destination[]
+}
+model Agent {
+  id String @id @default(uuid())
+  name String @unique
+  kind String
+  createdAt DateTime @default(now())
+}
+model Customer {
+  id String @id @default(uuid())
+  email String @unique
+  name String?
+  optedOut Boolean @default(false)
+  createdAt DateTime @default(now())
+  opportunities Opportunity[]
+  tasks Task[]
+}
+model Opportunity {
+  id String @id @default(uuid())
+  source String
+  customerId String
+  customer Customer @relation(fields: [customerId], references: [id])
+  taskType String
+  payload Json
+  status String @default("NEW")
+  rejectReason String?
+  createdAt DateTime @default(now())
+  quotes Quote[]
+  tasks Task[]
+}
+model Quote {
+  id String @id @default(uuid())
+  opportunityId String
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+  amountCents Int
+  currency String @default("USD")
+  pricingVersion String
+  expiresAt DateTime
+  status String @default("OPEN")
+  createdAt DateTime @default(now())
+  task Task?
+  payments PaymentTransaction[]
+}
+model Task {
+  id String @id @default(uuid())
+  opportunityId String
+  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
+  customerId String
+  customer Customer @relation(fields: [customerId], references: [id])
+  quoteId String @unique
+  quote Quote @relation(fields: [quoteId], references: [id])
+  taskType String
+  status TaskStatus @default(QUOTED)
+  input Json
+  failureReason String?
+  deliveredAt DateTime?
+  disputedAt DateTime?
+  disputeReason String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  artifacts TaskArtifact[]
+  validations TaskValidation[]
+  confirmation CustomerConfirmation?
+  earning Earning?
+  executions ExecutionAttempt[]
+  deliveryReceipt DeliveryReceipt?
+  @@index([status, createdAt])
+}
+model TaskArtifact {
+  id String @id @default(uuid())
+  taskId String
+  task Task @relation(fields: [taskId], references: [id])
+  kind String
+  filename String
+  mime String
+  sha256 String
+  sizeBytes Int
+  storagePath String
+  createdAt DateTime @default(now())
+  @@index([taskId, kind])
+}
+model TaskValidation {
+  id String @id @default(uuid())
+  taskId String
+  task Task @relation(fields: [taskId], references: [id])
+  passed Boolean
+  checks Json
+  createdAt DateTime @default(now())
+  @@index([taskId, createdAt])
+}
+model CustomerConfirmation {
+  id String @id @default(uuid())
+  taskId String @unique
+  task Task @relation(fields: [taskId], references: [id])
+  method String
+  evidence Json
+  createdAt DateTime @default(now())
+}
+model Earning {
+  id String @id @default(uuid())
+  taskId String @unique
+  task Task @relation(fields: [taskId], references: [id])
+  customerId String
+  amountCents Int
+  currency String @default("USD")
+  status EarningStatus @default(PENDING)
+  evidence Json
+  createdAt DateTime @default(now())
+  @@index([status, createdAt])
+}
+model Destination {
+  id String @id @default(uuid())
+  ownerId String
+  owner Owner @relation(fields: [ownerId], references: [id])
+  provider String @default("paypal")
+  recipientType String @default("EMAIL")
+  receiver String
+  currency String @default("USD")
+  verifiedByOwnerAt DateTime?
+  active Boolean @default(false)
+  createdAt DateTime @default(now())
+  payouts PayoutRequest[]
+  @@index([ownerId, active])
+}
+model PolicyVersion {
+  id String @id @default(uuid())
+  version String @unique
+  rules Json
+  activeFrom DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+model SystemFlag {
+  key String @id
+  value Boolean
+  updatedBy String
+  updatedAt DateTime @updatedAt
+}
+model PayoutRequest {
+  id String @id @default(uuid())
+  destinationId String
+  destination Destination @relation(fields: [destinationId], references: [id])
+  amountCents Int
+  currency String @default("USD")
+  purpose String
+  status PayoutStatus @default(AUTHORIZED)
+  idempotencyKey String @unique
+  authorization Json
+  providerBatchId String?
+  providerItemId String?
+  attempts Int @default(0)
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  paidAt DateTime?
+  reservation Reservation?
+  @@index([status, createdAt])
+}
+model Reservation {
+  id String @id @default(uuid())
+  payoutId String @unique
+  payout PayoutRequest @relation(fields: [payoutId], references: [id])
+  amountCents Int
+  status ReservationStatus @default(HELD)
+  createdAt DateTime @default(now())
+}
+model PaymentTransaction {
+  id String @id @default(uuid())
+  direction PaymentDirection
+  provider String @default("paypal")
+  quoteId String
+  quote Quote @relation(fields: [quoteId], references: [id])
+  providerOrderId String? @unique
+  providerCaptureId String? @unique
+  providerRefundId String? @unique
+  amountCents Int
+  currency String @default("USD")
+  status PaymentStatus @default(CREATED)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status, createdAt])
+}
+model ProviderEvent {
+  id String @id @default(uuid())
+  provider String
+  eventId String
+  eventType String
+  receivedAt DateTime @default(now())
+  payloadHash String
+  payload Json
+  verified Boolean
+  processedAt DateTime?
+  @@unique([provider, eventId])
+}
+model ProviderSnapshot {
+  id String @id @default(uuid())
+  subjectType String
+  subjectId String
+  provider String
+  payloadHash String
+  payload Json
+  createdAt DateTime @default(now())
+  @@index([subjectType, subjectId])
+}
+model LedgerEntry {
+  id String @id @default(uuid())
+  groupId String
+  idempotencyKey String
+  kind String
+  account LedgerAccount
+  amountCents Int
+  currency String @default("USD")
+  evidenceType String
+  evidenceId String
+  createdAt DateTime @default(now())
+  @@unique([idempotencyKey, account])
+  @@index([groupId])
+  @@index([account, currency])
+}
+model ReconciliationRecord {
+  id String @id @default(uuid())
+  subjectType String
+  subjectId String
+  outcome String
+  details Json
+  createdAt DateTime @default(now())
+  @@index([subjectType, subjectId, createdAt])
+}
+model AuditEvent {
+  id String @id @default(uuid())
+  ts DateTime @default(now())
+  agent String
+  action String
+  taskId String?
+  transactionId String?
+  authorizationId String?
+  provider String?
+  result String
+  evidence Json?
+  correlationId String
+  @@index([ts])
+  @@index([taskId, ts])
+}
+model ExecutionAttempt {
+  id String @id @default(uuid())
+  taskId String
+  task Task @relation(fields: [taskId], references: [id])
+  attempt Int
+  status ExecutionStatus @default(QUEUED)
+  workerId String?
+  leaseUntil DateTime?
+  inputHash String?
+  outputHash String?
+  error String?
+  startedAt DateTime?
+  finishedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([taskId, attempt])
+  @@index([status, leaseUntil])
+}
+model OutboxEvent {
+  id String @id @default(uuid())
+  topic String
+  aggregateId String
+  payload Json
+  dedupeKey String @unique
+  publishedAt DateTime?
+  attempts Int @default(0)
+  lastError String?
+  createdAt DateTime @default(now())
+  @@index([publishedAt, createdAt])
+}
+
+model DeliveryReceipt {
+  id String @id @default(uuid())
+  taskId String @unique
+  task Task @relation(fields: [taskId], references: [id])
+  artifactId String
+  tokenHash String @unique
+  expiresAt DateTime
+  deliveredAt DateTime @default(now())
+  downloadedAt DateTime?
+  acceptedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([expiresAt])
+}
+
+
+// Agentic marketplace discovery records are leads only until a source-specific adapter
+// independently verifies escrow/payment and terms. A feed's own "funded" claim is not proof.
+model MarketLead {
+  id String @id @default(uuid())
+  sourceKey String
+  externalId String
+  title String
+  taskType String?
+  description String?
+  sourceUrl String
+  claimUrl String?
+  rewardCents Int?
+  currency String @default("USD")
+  payload Json
+  status String @default("DISCOVERED")
+  rejectionReason String?
+  discoveredAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([sourceKey, externalId])
+  @@index([status, discoveredAt])
+  @@index([taskType, rewardCents])
+}
+
+
+model AgentRequest {
+  id String @id @default(uuid())
+  idempotencyKey String @unique
+  requestHash String
+  buyerEmail String
+  taskId String @unique
+  createdAt DateTime @default(now())
+  @@index([buyerEmail, createdAt])
+}
